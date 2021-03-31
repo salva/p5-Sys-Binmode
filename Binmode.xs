@@ -25,9 +25,8 @@ static Perl_ppaddr_t ORIG_PL_ppaddr[OP_max];
     #define dMARK_TOPMARK SV **mark = PL_stack_base + TOPMARK
 #endif
 
-#define DOWNGRADE_SVPV(sv) if (SvPOK(sv) && SvUTF8(sv)) sv_utf8_downgrade(sv, FALSE)
-
-static inline void MY_DOWNGRADE(pTHX_ SV** svp) {
+static inline void MY_ENCODE(pTHX_ SV *encoding, SV** svp) {
+  
     if (UNLIKELY(SvGAMAGIC(*svp))) {
 
         /* If the parameter in question is magical/overloaded
@@ -40,17 +39,22 @@ static inline void MY_DOWNGRADE(pTHX_ SV** svp) {
 
         /* fetches the overloadeed value */
         sv_copypv(replacement, *svp);
-
-        DOWNGRADE_SVPV(replacement);
-
         *svp = replacement;
     }
 
-    /* NB: READONLY strings can be downgraded. */
-    else DOWNGRADE_SVPV(*svp);
+    /* NB: READONLY strings can be up/downgraded. */
+    if (SvTYPE(*svp) != SVt_PVGV) {
+        if (strEQ(SvPV_nolen(encoding), "latin1"))
+            sv_utf8_downgrade(*svp, FALSE);
+        else if (strEQ(SvPV_nolen(encoding), "utf8"))
+            sv_utf8_upgrade(*svp);
+        else
+            Perl_croak(aTHX_ "Support for arbitrary encoding not implemented yet");
+    }
 }
 
-#define BINMODE_IS_ON (cop_hints_fetch_pvs(PL_curcop, HINT_KEY, 0) != &PL_sv_placeholder)
+#define dENCODING SV* encoding = cop_hints_fetch_pvs(PL_curcop, HINT_KEY, 0)
+#define ENCODING_IS_SET (encoding != &PL_sv_placeholder)
 
 /* For ops that take an indefinite number of args. */
 #define MAKE_OPEN_LIST_WRAPPER(OPID) MAKE_CAPPED_LIST_WRAPPER(OPID, 0)
@@ -63,7 +67,8 @@ static inline void MY_DOWNGRADE(pTHX_ SV** svp) {
 */
 #define MAKE_CAPPED_LIST_WRAPPER(OPID, OP_MAXARG)       \
 static OP* _wrapped_pp_##OPID(pTHX) {                   \
-    if (BINMODE_IS_ON) {                                \
+    dENCODING;                                          \
+    if (ENCODING_IS_SET) {                              \
         dSP;                                            \
         dMARK_TOPMARK;                                  \
                                                         \
@@ -77,7 +82,8 @@ static OP* _wrapped_pp_##OPID(pTHX) {                   \
                 while (numargs--) MARK--;               \
             }                                           \
                                                         \
-        while (++MARK <= SP) MY_DOWNGRADE(aTHX_ MARK);  \
+        while (++MARK <= SP)                            \
+            MY_ENCODE(aTHX_ encoding, MARK);            \
     }                                                   \
                                                         \
     return ORIG_PL_ppaddr[OPID](aTHX);                  \
@@ -86,10 +92,12 @@ static OP* _wrapped_pp_##OPID(pTHX) {                   \
 /* For ops that take a fixed number of args. */
 #define MAKE_FIXED_LIST_WRAPPER(OPID, NUMARGS)      \
 static OP* _wrapped_pp_##OPID(pTHX) {               \
-    if (BINMODE_IS_ON) {                            \
+    dENCODING;                                      \
+    if (ENCODING_IS_SET) {                          \
         unsigned numargs = NUMARGS;                 \
         dSP;                                        \
-        while (numargs--) MY_DOWNGRADE(aTHX_ SP--); \
+        while (numargs--)                           \
+          MY_ENCODE(aTHX_ encoding, SP--);          \
     }                                               \
                                                     \
     return ORIG_PL_ppaddr[OPID](aTHX);              \
@@ -98,9 +106,10 @@ static OP* _wrapped_pp_##OPID(pTHX) {               \
 /* For ops where only the last arg is a string. */
 #define MAKE_SP_WRAPPER(OPID)           \
 static OP* _wrapped_pp_##OPID(pTHX) {   \
-    if (BINMODE_IS_ON) {                \
+    dENCODING;                          \
+    if (ENCODING_IS_SET) {              \
         dSP;                            \
-        MY_DOWNGRADE(aTHX_ SP);         \
+        MY_ENCODE(aTHX_ encoding, SP);  \
     }                                   \
                                         \
     return ORIG_PL_ppaddr[OPID](aTHX);  \

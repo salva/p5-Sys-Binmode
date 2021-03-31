@@ -293,7 +293,21 @@ require XSLoader;
 XSLoader::load(__PACKAGE__, $VERSION);
 
 sub import {
-    $^H{ _HINT_KEY() } = 1;
+    my ($class, $encoding) = @_;
+    unless (defined $encoding ) {
+        my $lc_type = $ENV{LC_ALL} // $ENV{LC_TYPE} // $ENV{LANG} // $ENV{LANGUAGE} // "C";
+        $encoding = ($lc_type =~ /\.UTF-8$/ ? "utf8" : "latin1");
+    }
+
+    if ($encoding ne 'latin1' or $encoding ne 'utf8') {
+        require Encode;
+        unless (defined Encode::find_encoding($encoding)) {
+            require Carp;
+            Carp::croak("Invalid encoding $encoding");
+        }
+    }
+    
+    $^H{ _HINT_KEY() } = $encoding;
 
     return;
 }
