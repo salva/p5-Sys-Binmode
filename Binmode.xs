@@ -25,6 +25,29 @@ static Perl_ppaddr_t ORIG_PL_ppaddr[OP_max];
     #define dMARK_TOPMARK SV **mark = PL_stack_base + TOPMARK
 #endif
 
+static SV *heavy_encode(pTHX_ SV* encoding, SV* sv) {
+    dSP;
+    SV *out = sv_newmortal();
+    ENTER;
+    PUSHSTACK;
+    SAVETMPS;
+    PUSHMARK(sp);
+    EXTEND(SP, 3);
+    PUSHs(encoding);
+    sv_copypv(PUSHmortal, sv); /* Encode doesn't like getting constants here */
+    PUSHs(&PL_sv_yes);
+    PUTBACK;
+    call_pv("Encode::encode", G_SCALAR);
+    SPAGAIN;
+    SV *result = POPs;
+    SvSetSV(out, result);
+    PUTBACK;
+    FREETMPS;
+    POPSTACK;
+    LEAVE;
+    return out;
+}
+
 static inline void MY_ENCODE(pTHX_ SV *encoding, SV** svp) {
   
     if (UNLIKELY(SvGAMAGIC(*svp))) {
@@ -44,14 +67,23 @@ static inline void MY_ENCODE(pTHX_ SV *encoding, SV** svp) {
 
     /* NB: READONLY strings can be up/downgraded. */
     if (SvTYPE(*svp) != SVt_PVGV) {
-        if (strEQ(SvPV_nolen(encoding), "latin1"))
-            sv_utf8_downgrade(*svp, FALSE);
-        else if (strEQ(SvPV_nolen(encoding), "utf8"))
-            sv_utf8_upgrade(*svp);
-        else
-            Perl_croak(aTHX_ "Support for arbitrary encoding not implemented yet");
+        if (SvROK(encoding)) {
+
+        }
+        else {
+            if (strEQ(SvPV_nolen(encoding), "utf8")) {
+                sv_utf8_upgrade(*svp);
+            }
+            else {
+                if (strNE(SvPV_nolen(encoding), "latin1")) {
+                    *svp = heavy_encode(aTHX_ encoding, *svp);
+                }
+                sv_utf8_downgrade(*svp, FALSE);
+            }
+        }
     }
 }
+
 
 #define dENCODING SV* encoding = cop_hints_fetch_pvs(PL_curcop, HINT_KEY, 0)
 #define ENCODING_IS_SET (encoding != &PL_sv_placeholder)
